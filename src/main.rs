@@ -13,7 +13,6 @@ use crossterm::execute;
 use crossterm::queue;
 use crossterm::style::{Color, Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
-use regex::{Regex, RegexBuilder};
 use unicode_width::UnicodeWidthStr;
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
@@ -513,10 +512,11 @@ fn fuzzy_score(query: &str, candidate: &str) -> Option<i64> {
     Some(score)
 }
 
-fn build_query_regex(query: &str) -> Option<Regex> {
-    (!query.trim().is_empty() && query.len() <= 96)
-        .then_some(query)
-        .and_then(|value| RegexBuilder::new(value).case_insensitive(true).build().ok())
+fn literal_token_match(query: &str, candidate: &str) -> bool {
+    !query.is_empty()
+        && candidate
+            .to_ascii_lowercase()
+            .contains(&query.to_ascii_lowercase())
 }
 
 fn split_last_token(text: &str) -> (&str, &str) {
@@ -666,7 +666,6 @@ fn candidate_rank(
     left: &str,
     right: &str,
     token_query: &str,
-    token_regex: Option<&Regex>,
     candidate: &str,
 ) -> Option<i64> {
     let insert = candidate_insert_segment(left, right, candidate)?;
@@ -689,11 +688,9 @@ fn candidate_rank(
         score += fuzzy;
         matched = true;
     }
-    if let Some(regex) = token_regex {
-        if regex.is_match(candidate) {
-            score += 1_700;
-            matched = true;
-        }
+    if literal_token_match(token_query, candidate) {
+        score += 1_700;
+        matched = true;
     }
     if candidate
         .to_ascii_lowercase()
@@ -719,7 +716,6 @@ fn suggestion_for_editor(
     }
     let (line_prefix, token_fragment) = split_last_token(left);
     let token_query = token_fragment.trim_matches('"').trim_matches('\'');
-    let token_regex = build_query_regex(token_query);
     let mut ranked = HashMap::<String, i64>::new();
     history
         .iter()
@@ -727,9 +723,7 @@ fn suggestion_for_editor(
         .take(3000)
         .enumerate()
         .for_each(|(idx, line)| {
-            if let Some(score) =
-                candidate_rank(left, right, token_query, token_regex.as_ref(), line)
-            {
+            if let Some(score) = candidate_rank(left, right, token_query, line) {
                 let rank = score + 7_000 - idx as i64;
                 ranked
                     .entry(line.clone())
@@ -740,9 +734,7 @@ fn suggestion_for_editor(
     shell_builtin_candidates(shell_kind)
         .iter()
         .for_each(|candidate| {
-            if let Some(score) =
-                candidate_rank(left, right, token_query, token_regex.as_ref(), candidate)
-            {
+            if let Some(score) = candidate_rank(left, right, token_query, candidate) {
                 ranked
                     .entry((*candidate).to_owned())
                     .and_modify(|value| *value = (*value).max(score + 7_500))
@@ -751,8 +743,7 @@ fn suggestion_for_editor(
         });
     if !left.chars().any(|ch| ch.is_whitespace()) && !right.chars().any(|ch| ch.is_whitespace()) {
         executables.iter().take(8000).for_each(|exe| {
-            if let Some(score) = candidate_rank(left, right, token_query, token_regex.as_ref(), exe)
-            {
+            if let Some(score) = candidate_rank(left, right, token_query, exe) {
                 let rank = score + 5_000;
                 ranked
                     .entry(exe.clone())
@@ -766,7 +757,6 @@ fn suggestion_for_editor(
     if should_show_files {
         let file_line_prefix = line_prefix;
         let file_token_fragment = token_fragment;
-        let file_regex = build_query_regex(file_token_fragment);
         filesystem_candidates(
             file_line_prefix,
             file_token_fragment,
@@ -775,13 +765,7 @@ fn suggestion_for_editor(
         )
         .into_iter()
         .for_each(|candidate| {
-            if let Some(score) = candidate_rank(
-                left,
-                right,
-                file_token_fragment,
-                file_regex.as_ref(),
-                &candidate,
-            ) {
+            if let Some(score) = candidate_rank(left, right, file_token_fragment, &candidate) {
                 let rank = score
                     + if prefers_path_completion(left) {
                         11_000
@@ -1310,6 +1294,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     fn never_exists(_: &Path) -> bool {
         false
@@ -1317,6 +1302,16 @@ mod tests {
 
     fn always_exists(_: &Path) -> bool {
         true
+    }
+
+    fn editor_with(text: &str) -> EditorState {
+        let mut editor = EditorState::new();
+        editor.insert_text(text);
+        editor
+    }
+
+    fn missing_cwd() -> PathBuf {
+        PathBuf::from("C:\\syckmd-audit-02-missing-cwd")
     }
 
     #[test]
@@ -1377,5 +1372,116 @@ mod tests {
     fn resolve_posix_shell_rejects_empty_and_unset() {
         assert_eq!(resolve_posix_shell(Some(""), always_exists), "/bin/sh");
         assert_eq!(resolve_posix_shell(None, always_exists), "/bin/sh");
+    }
+
+    #[test]
+    fn literal_token_match_treats_dot_as_literal() {
+        assert!(literal_token_match("foo.txt", "copy foo.txt dest"));
+        assert!(literal_token_match("FOO.TXT", "archive\\foo.txt"));
+        assert!(!literal_token_match("foo.txt", "fooXtxt"));
+    }
+
+    #[test]
+    fn literal_token_match_treats_regex_metacharacters_as_literals() {
+        assert!(literal_token_match("(a+)+$", "echo (a+)+$"));
+        assert!(!literal_token_match("(a+)+$", &"a".repeat(40)));
+        assert!(literal_token_match("****", "dir ****"));
+        assert!(!literal_token_match("****", "abcd"));
+    }
+
+    #[test]
+    fn candidate_rank_matches_literal_filename_not_regex_dot() {
+        assert!(candidate_rank("", "", "foo.txt", "archive foo.txt.bak").is_some());
+        assert!(candidate_rank("", "", "foo.txt", "archive fooXtxt.bak").is_none());
+    }
+
+    #[test]
+    fn candidate_rank_does_not_hang_on_pathological_token() {
+        let query = "(a+)+$";
+        let haystack = format!("{}X", "a".repeat(40));
+        let started = Instant::now();
+        let miss = candidate_rank("", "", query, &haystack);
+        let hit = candidate_rank(query, "", query, &format!("{query} extra"));
+        assert!(started.elapsed() < Duration::from_millis(250));
+        assert!(miss.is_none());
+        assert!(hit.is_some());
+
+        let started = Instant::now();
+        let stars_miss = candidate_rank("", "", "****", "aaaaaaaaaaaaaaaa");
+        let stars_hit = candidate_rank("****", "", "****", "**** notes");
+        assert!(started.elapsed() < Duration::from_millis(250));
+        assert!(stars_miss.is_none());
+        assert!(stars_hit.is_some());
+    }
+
+    #[test]
+    fn suggestion_for_editor_keeps_literal_history_and_prefix_ghost() {
+        let cwd = missing_cwd();
+        let filename = editor_with("foo.txt");
+        let filename_suggestions = suggestion_for_editor(
+            &filename,
+            &cwd,
+            &[
+                "copy foo.txt dest".to_owned(),
+                "foo.txt.bak".to_owned(),
+                "fooXtxt".to_owned(),
+            ],
+            &[],
+            8,
+            ShellKind::Cmd,
+        );
+        assert!(
+            filename_suggestions
+                .iter()
+                .any(|value| value.contains("foo.txt"))
+        );
+        assert!(!filename_suggestions.iter().any(|value| value == "fooXtxt"));
+
+        let prefix = editor_with("git st");
+        let prefix_suggestions = suggestion_for_editor(
+            &prefix,
+            &cwd,
+            &["git status".to_owned()],
+            &[],
+            8,
+            ShellKind::Cmd,
+        );
+        assert_eq!(
+            prefix_suggestions.first().map(String::as_str),
+            Some("git status")
+        );
+        assert_eq!(
+            selected_suggestion_suffix(&prefix, &prefix_suggestions, 0).as_deref(),
+            Some("atus")
+        );
+        assert_eq!(
+            candidate_insert_segment("git st", "", "git status").as_deref(),
+            Some("atus")
+        );
+    }
+
+    #[test]
+    fn suggestion_for_editor_pathological_token_returns_quickly() {
+        let editor = editor_with("(a+)+$");
+        let haystack = format!("{}X", "a".repeat(40));
+        let started = Instant::now();
+        let suggestions = suggestion_for_editor(
+            &editor,
+            &missing_cwd(),
+            &[
+                haystack,
+                format!("{} still literal", "(a+)+$"),
+                "****".to_owned(),
+            ],
+            &[],
+            8,
+            ShellKind::Cmd,
+        );
+        assert!(started.elapsed() < Duration::from_millis(250));
+        assert!(
+            suggestions
+                .iter()
+                .any(|value| value.contains("(a+)+$ still literal"))
+        );
     }
 }
