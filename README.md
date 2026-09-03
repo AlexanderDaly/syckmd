@@ -30,7 +30,7 @@ Configuration can be done via environment variables.
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+GNU GPLv3. See [LICENSE](LICENSE) for details.
 
 ## Contact
 
