@@ -575,6 +575,33 @@ fn shell_builtin_candidates(shell_kind: ShellKind) -> &'static [&'static str] {
     }
 }
 
+fn is_windows_unc_path(path: &str) -> bool {
+    is_windows_unc_path_on(cfg!(windows), path)
+}
+
+// UNC / network paths only. `\\?\C:\...` is a local extended path.
+// On non-Windows, `//server/share` is a POSIX absolute path, not UNC.
+fn is_windows_unc_path_on(windows: bool, path: &str) -> bool {
+    if !windows {
+        return false;
+    }
+    let bytes = path.as_bytes();
+    let sep = |b: u8| b == b'\\' || b == b'/';
+    if bytes.len() < 2 || !sep(bytes[0]) || !sep(bytes[1]) {
+        return false;
+    }
+    if bytes.len() >= 4 && (bytes[2] == b'?' || bytes[2] == b'.') && sep(bytes[3]) {
+        let rest = &path[4..];
+        return match rest.get(..3) {
+            Some(prefix) if prefix.eq_ignore_ascii_case("UNC") => {
+                rest.len() == 3 || sep(rest.as_bytes()[3])
+            }
+            _ => false,
+        };
+    }
+    true
+}
+
 fn filesystem_candidates(
     line_prefix: &str,
     path_fragment: &str,
@@ -604,6 +631,9 @@ fn filesystem_candidates(
     } else {
         cwd.to_path_buf()
     };
+    if is_windows_unc_path(cleaned) || is_windows_unc_path(&dir.to_string_lossy()) {
+        return Vec::new();
+    }
     if !dir.is_dir() {
         return Vec::new();
     }
@@ -1294,7 +1324,9 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant};
+
+    use std::fs;
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     fn never_exists(_: &Path) -> bool {
         false
@@ -1312,6 +1344,18 @@ mod tests {
 
     fn missing_cwd() -> PathBuf {
         PathBuf::from("C:\\syckmd-audit-02-missing-cwd")
+    }
+
+    fn unique_temp_dir() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|value| value.as_nanos())
+            .unwrap_or(0);
+        let dir = env::temp_dir().join(format!("syckmd-unc-{nanos}"));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("alpha.txt"), b"").unwrap();
+        fs::create_dir(dir.join("subdir")).unwrap();
+        dir
     }
 
     #[test]
@@ -1483,5 +1527,107 @@ mod tests {
                 .iter()
                 .any(|value| value.contains("(a+)+$ still literal"))
         );
+    }
+
+    #[test]
+    fn detects_classic_unc_paths() {
+        assert!(is_windows_unc_path(r"\\server\share"));
+        assert!(is_windows_unc_path(r"\\server\share\foo"));
+        assert!(is_windows_unc_path(r"\\server"));
+        assert!(is_windows_unc_path(r"\\"));
+        assert!(is_windows_unc_path("//server/share/foo"));
+        assert!(is_windows_unc_path(r"\\server/share"));
+        assert!(is_windows_unc_path("//server\\share"));
+    }
+
+    #[test]
+    fn detects_verbatim_and_device_unc_paths() {
+        assert!(is_windows_unc_path(r"\\?\UNC\server\share"));
+        assert!(is_windows_unc_path(r"\\?\unc\server\share\foo"));
+        assert!(is_windows_unc_path(r"\\?\UNC"));
+        assert!(is_windows_unc_path("//?/UNC/server/share"));
+        assert!(is_windows_unc_path(r"\\.\UNC\server\share"));
+        assert!(is_windows_unc_path("//./UNC/server/share"));
+    }
+
+    #[test]
+    fn rejects_local_relative_and_drive_paths() {
+        assert!(!is_windows_unc_path(""));
+        assert!(!is_windows_unc_path("server"));
+        assert!(!is_windows_unc_path(r"foo\bar"));
+        assert!(!is_windows_unc_path("relative/path"));
+        assert!(!is_windows_unc_path(r"C:\Windows"));
+        assert!(!is_windows_unc_path(r"C:\"));
+        assert!(!is_windows_unc_path(r"\Windows"));
+        assert!(!is_windows_unc_path("/usr/bin"));
+        assert!(!is_windows_unc_path("D:foo"));
+    }
+
+    #[test]
+    fn rejects_extended_local_and_device_paths() {
+        assert!(!is_windows_unc_path(r"\\?\C:\Windows"));
+        assert!(!is_windows_unc_path(r"\\?\c:\Windows\System32"));
+        assert!(!is_windows_unc_path(r"\\?\C:"));
+        assert!(!is_windows_unc_path("//?/C:/Windows"));
+        assert!(!is_windows_unc_path(r"\\.\C:\"));
+        assert!(!is_windows_unc_path(r"\\.\pipe\foo"));
+        assert!(!is_windows_unc_path(r"\\?\GLOBALROOT\Device\Harddisk0"));
+    }
+
+    #[test]
+    fn non_windows_does_not_treat_posix_absolute_as_unc() {
+        assert!(!is_windows_unc_path_on(false, "//server/share/foo"));
+        assert!(!is_windows_unc_path_on(false, r"\\server\share"));
+        assert!(!is_windows_unc_path_on(false, r"\\?\UNC\server\share"));
+        assert!(!is_windows_unc_path_on(false, "/usr/bin"));
+        assert!(is_windows_unc_path_on(true, "//server/share/foo"));
+        assert!(is_windows_unc_path_on(true, r"\\?\UnC\server\share"));
+    }
+
+    #[test]
+    fn filesystem_candidates_skips_unc_before_read_dir() {
+        let cwd = env::current_dir().unwrap();
+        assert!(filesystem_candidates("cd ", r"\\server\share\", &cwd, 10).is_empty());
+        assert!(filesystem_candidates("cd ", r"\\server\share\foo", &cwd, 10).is_empty());
+        assert!(filesystem_candidates("cd ", "//server/share/", &cwd, 10).is_empty());
+        assert!(filesystem_candidates("cd ", r"\\?\UNC\server\share\", &cwd, 10).is_empty());
+        assert!(filesystem_candidates("", r"\\?\unc\server\share\foo", &cwd, 10).is_empty());
+    }
+
+    #[test]
+    fn filesystem_candidates_lists_relative_and_drive_letter_paths() {
+        let dir = unique_temp_dir();
+        let relative = filesystem_candidates("", "al", &dir, 20);
+        assert!(
+            relative.iter().any(|value| value.contains("alpha.txt")),
+            "relative completions: {relative:?}"
+        );
+
+        let fragment = format!("{}{}al", dir.display(), std::path::MAIN_SEPARATOR);
+        let absolute = filesystem_candidates("", &fragment, &dir, 20);
+        assert!(
+            absolute.iter().any(|value| value.contains("alpha.txt")),
+            "drive-letter completions: {absolute:?}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn filesystem_candidates_lists_extended_local_paths() {
+        let dir = unique_temp_dir();
+        let verbatim = dir.canonicalize().unwrap();
+        assert!(
+            !is_windows_unc_path(&verbatim.to_string_lossy()),
+            "canonicalize produced UNC: {}",
+            verbatim.display()
+        );
+        let fragment = format!("{}{}al", verbatim.display(), std::path::MAIN_SEPARATOR);
+        let values = filesystem_candidates("", &fragment, &verbatim, 20);
+        assert!(
+            values.iter().any(|value| value.contains("alpha.txt")),
+            "extended-local completions: {values:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }
