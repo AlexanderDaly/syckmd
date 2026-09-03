@@ -1,15 +1,12 @@
-Local service is unauthenticated on fixed port (127.0.0.1:47653)
-Any local process can potentially inject/poison suggestions.
-(zsh/fish typically keep completion logic in-process.)
+Security work: see [audit/FINDINGS.md](audit/FINDINGS.md) and [audit/ISSUES.md](audit/ISSUES.md).
+
+A local completion sidecar was considered and is not present.
 
 No quote-aware token acceptance
 Word-accept logic is whitespace-based; quoted arguments can be broken.
 
 No path-aware/tab-aware filesystem completion model
 Suggestion engine doesn’t understand filesystem context like zsh completion does.
-
-No fuzzy matching / typo correction
-Tools like zsh (CORRECT + plugins), fish, and Fig/Warp can recover from near-miss input.
 
 No contextual ranking by directory/session/toolchain
 Modern tools prioritize by cwd/project; current ranking is simple recency/frequency-like behavior.
