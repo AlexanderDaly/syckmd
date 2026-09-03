@@ -204,6 +204,29 @@ fn process_snapshot_table() -> HashMap<u32, (u32, String)> {
     table
 }
 
+fn is_shell_exe_name(name: &str) -> bool {
+    const SHELL_EXES: &[&str] = &[
+        "cmd.exe",
+        "powershell.exe",
+        "pwsh.exe",
+        "bash.exe",
+        "bash",
+        "zsh.exe",
+        "zsh",
+        "fish.exe",
+        "fish",
+        "sh.exe",
+        "sh",
+    ];
+    let basename = Path::new(name)
+        .file_name()
+        .and_then(|file_name| file_name.to_str())
+        .unwrap_or(name);
+    SHELL_EXES
+        .iter()
+        .any(|shell| basename.eq_ignore_ascii_case(shell))
+}
+
 #[cfg(windows)]
 fn detect_parent_shell_name() -> Option<String> {
     let table = process_snapshot_table();
@@ -215,16 +238,8 @@ fn detect_parent_shell_name() -> Option<String> {
             break;
         }
         let (_, name) = table.get(&parent)?.clone();
-        let lowered = name.to_ascii_lowercase();
-        if lowered.contains("pwsh")
-            || lowered.contains("powershell")
-            || lowered.contains("cmd")
-            || lowered.contains("bash")
-            || lowered.contains("zsh")
-            || lowered.contains("fish")
-            || lowered.contains("sh")
-        {
-            return Some(lowered);
+        if is_shell_exe_name(&name) {
+            return Some(name.to_ascii_lowercase());
         }
         pid = parent;
     }
@@ -1651,6 +1666,31 @@ mod tests {
                 expected,
                 "left={left:?}"
             );
+        }
+    }
+
+    #[test]
+    fn is_shell_exe_name_matches_known_shells_only() {
+        let cases = [
+            ("cmd.exe", true),
+            ("powershell.exe", true),
+            ("pwsh.exe", true),
+            ("bash.exe", true),
+            ("bash", true),
+            ("zsh.exe", true),
+            ("zsh", true),
+            ("fish.exe", true),
+            ("fish", true),
+            ("sh.exe", true),
+            ("sh", true),
+            ("CMD.EXE", true),
+            ("PowerShell.exe", true),
+            ("SearchHost.exe", false),
+            ("SecurityHealthService.exe", false),
+            ("hash.exe", false),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(is_shell_exe_name(name), expected, "{name}");
         }
     }
 }
