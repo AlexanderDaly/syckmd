@@ -474,6 +474,10 @@ fn prefers_path_completion(left: &str) -> bool {
         .contains(&first.as_str())
 }
 
+fn should_offer_filesystem(left: &str, token_fragment: &str) -> bool {
+    token_fragment.contains('\\') || token_fragment.contains('/') || prefers_path_completion(left)
+}
+
 fn fuzzy_score(query: &str, candidate: &str) -> Option<i64> {
     if query.is_empty() {
         return None;
@@ -783,8 +787,7 @@ fn suggestion_for_editor(
         });
     }
 
-    let should_show_files = left.chars().any(|ch| ch.is_whitespace()) || token_fragment.is_empty();
-    if should_show_files {
+    if should_offer_filesystem(left, token_fragment) {
         let file_line_prefix = line_prefix;
         let file_token_fragment = token_fragment;
         filesystem_candidates(
@@ -1629,5 +1632,25 @@ mod tests {
             "extended-local completions: {values:?}"
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn should_offer_filesystem_trigger() {
+        let cases = [
+            ("echo hi", false),
+            ("cd ", true),
+            ("dir ", true),
+            ("type file", true),
+            ("copy x \\", true),
+            ("git commit", false),
+        ];
+        for (left, expected) in cases {
+            let (_, token_fragment) = split_last_token(left);
+            assert_eq!(
+                should_offer_filesystem(left, token_fragment),
+                expected,
+                "left={left:?}"
+            );
+        }
     }
 }
