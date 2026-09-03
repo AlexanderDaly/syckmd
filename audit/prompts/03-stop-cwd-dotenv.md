@@ -8,7 +8,7 @@ Work in `C:\Users\Alexander\Documents\sickmd`. You own **only issue 03**.
 
 Read `audit/issues/03-dotenv-cwd.md` and `audit/FINDINGS.md` first. Do not implement issue 04 (ComSpec validation).
 
-**Task:** `main()` calls `dotenvy::dotenv()` and ignores the result. That loads a `.env` from the current directory into the process environment before shell detection and command spawn. A planted `.env` can rewrite `ComSpec`, `PATH`, or `SHELL`.
+**Task:** `main()` calls `dotenvy::dotenv()` and ignores the result. That searches cwd and parents for a `.env` and fills in missing environment variables (it does not overwrite existing `ComSpec`/`PATH`/`SHELL`). A planted `.env` can still set unset vars such as `SYCKMD_MAX_SUGGESTIONS`.
 
 Remove dotenv loading. Remove the `dotenvy` dependency. Keep reading `SYCKMD_MAX_SUGGESTIONS` from the real environment.
 

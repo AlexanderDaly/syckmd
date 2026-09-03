@@ -24,8 +24,9 @@
 
 ## Acceptance
 
-- Helper recognizes Windows UNC (`\\server\...`, `//server/...`, `\\?\UNC\...`)
-- `filesystem_candidates` returns empty for UNC / network roots and does not `read_dir` them
+- Helper recognizes Windows UNC (`\\server\...`, `//server/...`, `\\?\UNC\...`) **only on Windows**. Detection of the `UNC` extended prefix is case-insensitive (`\\?\unc\`, mixed case).
+- On non-Windows, `//server/share/...` remains a normal POSIX absolute path and must still complete. Gate UNC recognition on the current platform (injectable in tests).
+- `filesystem_candidates` returns empty for UNC **before** `dir.is_dir()` and **before** `fs::read_dir`, so a UNC token never triggers SMB metadata access.
 - Local paths (`C:\...`, relative, `\\?\C:\...`) still complete
-- Unit tests for the UNC detector
+- Unit tests: classic UNC, verbatim/device UNC, lowercase/mixed-case `\\?\UNC\`, extended local (not UNC), and a `windows=false` case that does not treat `//server/share` as UNC
 - `cargo build` succeeds

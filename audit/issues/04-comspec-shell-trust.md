@@ -13,6 +13,14 @@ If the environment is poisoned (including via issue 03), every Enter runs the at
 
 PowerShell / pwsh paths hardcode `"powershell"` / `"pwsh"` (PATH search). That is acceptable for this issue; do not expand into a full PATH-trust model.
 
+## Threat model
+
+This is a local wrapper. `ComSpec` and `SHELL` are process environment, the same trust class as `PATH` (already accepted residual risk in FINDINGS.md). Validation here is a footgun guard, not binary authentication:
+
+- Reject empty/unset `ComSpec`, missing files, and basenames other than `cmd.exe` (case-insensitive), so `ComSpec=C:\temp\evil.exe` is not spawned.
+- Do **not** require SystemRoot, Authenticode, or canonical path identity. An attacker who can plant a file named `cmd.exe` and set `ComSpec` already controls the launch environment.
+- Non-Windows `SHELL`: accept a non-empty path to an existing file, else `/bin/sh`. Do not allowlist Unix shells; POSIX is a compile fallback for a Windows-first tool. Attacker-controlled `SHELL` is excluded from this issue (same class as `PATH`).
+
 ## Location
 
 - `src/main.rs` — `detect_shell_profile`

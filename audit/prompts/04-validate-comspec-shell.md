@@ -10,6 +10,8 @@ Read `audit/issues/04-comspec-shell-trust.md` and `audit/FINDINGS.md` first. Do 
 
 **Task:** `detect_shell_profile` uses `env::var("ComSpec")` (Windows CMD) and `env::var("SHELL")` (non-Windows) as `Command::new` program with no validation. If those env vars point at an attacker binary, every Enter runs it.
 
+This is a footgun guard, not binary authentication. Do not require SystemRoot, Authenticode, or a Unix-shell allowlist. Planting a file named `cmd.exe` and setting `ComSpec` is the same class as controlling `PATH` (accepted residual risk).
+
 Add a small helper that:
 
 - Windows: only accept `ComSpec` if it is a non-empty path to an **existing file** whose basename is `cmd.exe` (case-insensitive). Otherwise use `"cmd"`.

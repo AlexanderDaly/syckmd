@@ -7,11 +7,9 @@
 
 ## Finding
 
-`main` calls `dotenvy::dotenv()` with the result ignored. That loads a `.env` from the process cwd into the environment before shell detection and spawn.
+`main` calls `dotenvy::dotenv()` with the result ignored. That searches the current directory and parent directories for a `.env` and populates environment variables that are not already set. Existing process values are preserved; `.env` cannot overwrite `ComSpec`, `PATH`, or `SHELL` if they are already present.
 
-A malicious `.env` in a directory you launch from can rewrite `ComSpec`, `PATH`, `SHELL`, or `SYCKMD_MAX_SUGGESTIONS`.
-
-The only env var this program documents is `SYCKMD_MAX_SUGGESTIONS`. dotenv is not needed for that.
+A planted `.env` can still set missing variables, including `SYCKMD_MAX_SUGGESTIONS`. The only env var this program documents is `SYCKMD_MAX_SUGGESTIONS`. dotenv is not needed for that.
 
 ## Location
 

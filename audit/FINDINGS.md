@@ -2,7 +2,7 @@
 
 Static review of `AlexanderDaly/syckmd` (fork of `xsysctl/syckmd`), commit `05cb4a7`.
 
-**Verdict:** no malware, no C2, no exploit payloads. This is a local Windows shell wrapper with ghost completion. Findings below are real bugs and leftover surface, not implants.
+**Verdict:** No obvious malware, C2, or exploit payloads were found in the reviewed source and git history. Runtime execution and independent crates.io checksum review were not performed. This is a local Windows shell wrapper with ghost completion. Findings below are real bugs and leftover surface, not implants.
 
 ## Scope
 
@@ -34,6 +34,7 @@ Do not file extra issues for these:
 
 - Enter runs the typed line via `cmd /D /C` or `powershell -NoLogo -Command`.
 - An attacker who already controls `PATH` or `ConsoleHost_history.txt` can influence suggestions.
+- `ComSpec` / `SHELL` are process environment after a basename/existence footgun check. Authenticating the binary (SystemRoot, signature) is out of scope; planting a file named `cmd.exe` and setting `ComSpec` is the same class as controlling `PATH`.
 - Full zsh/fish-grade completion trust is out of scope for this pass.
 
 ## Findings (actionable)
@@ -43,7 +44,7 @@ Tracked as local issues under `audit/issues/`. GitHub Issues are disabled on thi
 | ID | Severity | Title |
 |---|---|---|
 | [01](issues/01-unused-http-deps.md) | Low | Unused `reqwest` / `serde` / `serde_json` still pulled at build time |
-| [02](issues/02-user-input-regex.md) | Medium | Last token compiled as a regex (ReDoS) |
+| [02](issues/02-user-input-regex.md) | Low | Last token compiled as a regex (literal vs regex semantics) |
 | [03](issues/03-dotenv-cwd.md) | Medium | `dotenvy::dotenv()` loads cwd `.env` into process env |
 | [04](issues/04-comspec-shell-trust.md) | Medium | `ComSpec` / `SHELL` used as spawn target with no check |
 | [05](issues/05-unc-path-enumeration.md) | Medium | Completion `read_dir` on UNC / network paths |
