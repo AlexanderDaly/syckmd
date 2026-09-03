@@ -575,8 +575,16 @@ fn shell_builtin_candidates(shell_kind: ShellKind) -> &'static [&'static str] {
     }
 }
 
-// UNC / network paths only. `\\?\C:\...` is a local extended path.
 fn is_windows_unc_path(path: &str) -> bool {
+    is_windows_unc_path_on(cfg!(windows), path)
+}
+
+// UNC / network paths only. `\\?\C:\...` is a local extended path.
+// On non-Windows, `//server/share` is a POSIX absolute path, not UNC.
+fn is_windows_unc_path_on(windows: bool, path: &str) -> bool {
+    if !windows {
+        return false;
+    }
     let bytes = path.as_bytes();
     let sep = |b: u8| b == b'\\' || b == b'/';
     if bytes.len() < 2 || !sep(bytes[0]) || !sep(bytes[1]) {
@@ -1564,6 +1572,16 @@ mod tests {
         assert!(!is_windows_unc_path(r"\\.\C:\"));
         assert!(!is_windows_unc_path(r"\\.\pipe\foo"));
         assert!(!is_windows_unc_path(r"\\?\GLOBALROOT\Device\Harddisk0"));
+    }
+
+    #[test]
+    fn non_windows_does_not_treat_posix_absolute_as_unc() {
+        assert!(!is_windows_unc_path_on(false, "//server/share/foo"));
+        assert!(!is_windows_unc_path_on(false, r"\\server\share"));
+        assert!(!is_windows_unc_path_on(false, r"\\?\UNC\server\share"));
+        assert!(!is_windows_unc_path_on(false, "/usr/bin"));
+        assert!(is_windows_unc_path_on(true, "//server/share/foo"));
+        assert!(is_windows_unc_path_on(true, r"\\?\UnC\server\share"));
     }
 
     #[test]
