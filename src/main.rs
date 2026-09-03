@@ -1262,7 +1262,6 @@ fn run_shell(config: &AppConfig) -> io::Result<()> {
 }
 
 fn main() {
-    let _ = dotenvy::dotenv();
     let max_suggestions = env::var("SYCKMD_MAX_SUGGESTIONS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
