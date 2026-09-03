@@ -232,6 +232,35 @@ fn detect_parent_shell_name() -> Option<String> {
     None
 }
 
+#[cfg(any(windows, test))]
+fn resolve_cmd_program(comspec: Option<&str>, exists: impl Fn(&Path) -> bool) -> String {
+    let Some(value) = comspec.filter(|value| !value.is_empty()) else {
+        return "cmd".to_owned();
+    };
+    let path = Path::new(value);
+    let is_cmd = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("cmd.exe"));
+    if is_cmd && exists(path) {
+        value.to_owned()
+    } else {
+        "cmd".to_owned()
+    }
+}
+
+#[cfg(any(not(windows), test))]
+fn resolve_posix_shell(shell: Option<&str>, exists: impl Fn(&Path) -> bool) -> String {
+    let Some(value) = shell.filter(|value| !value.is_empty()) else {
+        return "/bin/sh".to_owned();
+    };
+    if exists(Path::new(value)) {
+        value.to_owned()
+    } else {
+        "/bin/sh".to_owned()
+    }
+}
+
 fn detect_shell_profile() -> ShellProfile {
     #[cfg(windows)]
     {
@@ -253,14 +282,14 @@ fn detect_shell_profile() -> ShellProfile {
             if parent.contains("cmd") {
                 return ShellProfile {
                     kind: ShellKind::Cmd,
-                    program: env::var("ComSpec").unwrap_or_else(|_| "cmd".to_owned()),
+                    program: resolve_cmd_program(env::var("ComSpec").ok().as_deref(), Path::is_file),
                     command_args: vec!["/D".to_owned(), "/C".to_owned()],
                 };
             }
         }
         return ShellProfile {
             kind: ShellKind::Cmd,
-            program: env::var("ComSpec").unwrap_or_else(|_| "cmd".to_owned()),
+            program: resolve_cmd_program(env::var("ComSpec").ok().as_deref(), Path::is_file),
             command_args: vec!["/D".to_owned(), "/C".to_owned()],
         };
     }
@@ -268,7 +297,7 @@ fn detect_shell_profile() -> ShellProfile {
     {
         ShellProfile {
             kind: ShellKind::Posix,
-            program: env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned()),
+            program: resolve_posix_shell(env::var("SHELL").ok().as_deref(), Path::is_file),
             command_args: vec!["-lc".to_owned()],
         }
     }
@@ -1275,5 +1304,78 @@ fn main() {
     if let Err(error) = result {
         eprintln!("{error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn never_exists(_: &Path) -> bool {
+        false
+    }
+
+    fn always_exists(_: &Path) -> bool {
+        true
+    }
+
+    #[test]
+    fn resolve_cmd_program_accepts_existing_cmd_exe() {
+        assert_eq!(
+            resolve_cmd_program(Some(r"C:\Windows\System32\cmd.exe"), always_exists),
+            r"C:\Windows\System32\cmd.exe"
+        );
+    }
+
+    #[test]
+    fn resolve_cmd_program_accepts_cmd_exe_case_insensitive() {
+        assert_eq!(
+            resolve_cmd_program(Some(r"C:\WINDOWS\system32\CMD.EXE"), always_exists),
+            r"C:\WINDOWS\system32\CMD.EXE"
+        );
+    }
+
+    #[test]
+    fn resolve_cmd_program_rejects_missing_file() {
+        assert_eq!(
+            resolve_cmd_program(Some(r"C:\Windows\System32\cmd.exe"), never_exists),
+            "cmd"
+        );
+    }
+
+    #[test]
+    fn resolve_cmd_program_rejects_wrong_basename() {
+        assert_eq!(
+            resolve_cmd_program(Some(r"C:\temp\evil.exe"), always_exists),
+            "cmd"
+        );
+    }
+
+    #[test]
+    fn resolve_cmd_program_rejects_empty_and_unset() {
+        assert_eq!(resolve_cmd_program(Some(""), always_exists), "cmd");
+        assert_eq!(resolve_cmd_program(None, always_exists), "cmd");
+    }
+
+    #[test]
+    fn resolve_posix_shell_accepts_existing_file() {
+        assert_eq!(
+            resolve_posix_shell(Some("/bin/bash"), always_exists),
+            "/bin/bash"
+        );
+    }
+
+    #[test]
+    fn resolve_posix_shell_rejects_missing_file() {
+        assert_eq!(
+            resolve_posix_shell(Some("/bin/zsh"), never_exists),
+            "/bin/sh"
+        );
+    }
+
+    #[test]
+    fn resolve_posix_shell_rejects_empty_and_unset() {
+        assert_eq!(resolve_posix_shell(Some(""), always_exists), "/bin/sh");
+        assert_eq!(resolve_posix_shell(None, always_exists), "/bin/sh");
     }
 }
